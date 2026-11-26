@@ -45,21 +45,35 @@ returns boolean language sql stable security definer set search_path = public as
 $$;
 
 -- ---------- WhatsApp ----------
+-- Provedor atual: UAZAPI (conexão por QR code, o tatuador continua usando o celular).
+-- O campo provider deixa a porta aberta para a API oficial (Cloud API) no futuro.
 create table whatsapp_accounts (
   id              uuid primary key default gen_random_uuid(),
   studio_id       uuid not null references studios(id) on delete cascade,
-  waba_id         text not null,
-  phone_number_id text not null unique,     -- usado para rotear o webhook ao estúdio certo
+  provider        text not null default 'uazapi',   -- 'uazapi' | 'cloud_api'
+  instance_id     text not null unique,             -- instância na UAZAPI (roteia o webhook ao estúdio certo)
+  api_base_url    text,                             -- ex.: https://suaconta.uazapi.com
   display_phone   text,
-  coexistence     boolean not null default false,
+  status          text,                             -- connected / disconnected
   created_at      timestamptz not null default now()
 );
 
 -- Tokens ficam separados e SEM acesso pelo navegador (só o servidor lê)
 create table whatsapp_credentials (
   whatsapp_account_id uuid primary key references whatsapp_accounts(id) on delete cascade,
-  access_token        text not null,
+  instance_token      text not null,
+  webhook_secret      text not null default encode(gen_random_bytes(24), 'hex'),
   updated_at          timestamptz not null default now()
+);
+
+-- Log bruto de tudo que chega no webhook (para auditoria e para ajustar a leitura dos anúncios)
+create table webhook_events (
+  id                  bigserial primary key,
+  whatsapp_account_id uuid references whatsapp_accounts(id) on delete set null,
+  payload             jsonb not null,
+  processed           boolean not null default false,
+  error               text,
+  received_at         timestamptz not null default now()
 );
 
 -- ---------- Contatos (leads) ----------
@@ -70,7 +84,7 @@ create table contacts (
   name             text,
   -- Atribuição: gravada na PRIMEIRA mensagem e nunca sobrescrita
   source           lead_source not null default 'organic',
-  ctwa_clid        text,
+  ctwa_clid        text,                     -- nem sempre vem pela UAZAPI
   ad_source_id     text,                     -- ID do anúncio
   ad_source_type   text,
   ad_headline      text,
@@ -208,6 +222,7 @@ alter table studios              enable row level security;
 alter table studio_members       enable row level security;
 alter table whatsapp_accounts    enable row level security;
 alter table whatsapp_credentials enable row level security;  -- sem política = ninguém do navegador lê
+alter table webhook_events       enable row level security;  -- idem
 alter table contacts             enable row level security;
 alter table conversations        enable row level security;
 alter table messages             enable row level security;
